@@ -1,4 +1,7 @@
 #include <windows.h>
+#ifdef GetCurrentTime
+#undef GetCurrentTime
+#endif
 #include <unknwn.h>
 #include <dbghelp.h>
 #include <winrt/base.h>
@@ -81,7 +84,7 @@ bool ResolveTaskbarSymbols() {
     if (!base) return false;
 
     std::vector<SymbolMatch> matches = {
-        {L"CTaskBand::", &g_primarySiteVtable},
+        {L"CTaskBand::`vftable\'{for `ITaskListWndSite'\}", &g_primarySiteVtable},
         {L"CTaskBand::GetTaskbarHost", &g_getTaskbarHost},
         {L"TaskbarHost::FrameHeight", &g_frameHeight},
         {L"std::_Ref_count_base::_Decref", &g_decref}
@@ -150,7 +153,7 @@ bool IsHidden(HWND hwnd) {
     return total>0 && shown*4<total;
 }
 
-LRESULT CALLBACK ThreadHook(int code, WPARAM, LPARAM lp) {
+LRESULT CALLBACK ThreadHook(int code, WPARAM wp, LPARAM lp) {
     if (code>=0 && lp) {
         auto* msg=reinterpret_cast<CWPRETSTRUCT*>(lp);
         if (msg->message==kApplyMessage && msg->hwnd==g_bridge) {
@@ -161,7 +164,7 @@ LRESULT CALLBACK ThreadHook(int code, WPARAM, LPARAM lp) {
             } catch (...) {}
         }
     }
-    return CallNextHookEx(g_threadHook,code,0,lp);
+    return CallNextHookEx(g_threadHook,code,wp,lp);
 }
 
 DWORD WINAPI Worker(void*) {
