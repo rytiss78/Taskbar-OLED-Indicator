@@ -1,60 +1,81 @@
 name: Build experimental DLL
+
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
-      - 'src/**'
-      - 'CMakeLists.txt'
-      - '.github/workflows/build.yml'
+      - "src/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/build.yml"
+
 permissions:
   contents: read
+
 jobs:
   build:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
       - name: Configure x64
         run: cmake -S . -B build -A x64
+
       - name: Compile
         run: cmake --build build --config Release --parallel
-      - name: Verify architecture and exports
+
+      - name: Verify PE architecture and shim exports
         shell: pwsh
         run: |
           $dll = 'build/Release/AcRes.dll'
           if (!(Test-Path $dll)) { throw 'DLL not produced' }
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-          if (!(Test-Path $vswhere)) { throw 'vswhere.exe not found' }
-          $vs = & $vswhere -latest -products '*' -property installationPath
-          if (!$vs) { throw 'Visual Studio installation not found' }
-          $dumpbin = Get-ChildItem (Join-Path $vs 'VC/Tools/MSVC') -Filter dumpbin.exe -Recurse |
-            Where-Object FullName -Match '\\Hostx64\\x64\\dumpbin.exe
-      - name: Package
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force package | Out-Null
-          Copy-Item build/Release/AcRes.dll package/
-          Copy-Item README.md package/
-          @'
-          EXPERIMENTAL DLL ONLY — NOT AN INSTALLER.
-          Target: Windows 11 x64 build 26300.9711.
-          Do not copy this DLL into System32 or install an SDB with it.
-          This artifact has not been runtime-validated. Keep Task Manager available.
-          '@ | Set-Content package/TEST-WARNING.txt
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Taskbar-OLED-Indicator-experimental-x64
-          path: package/
-          retention-days: 14
- |
-            Select-Object -First 1 -ExpandProperty FullName
-          if (!$dumpbin) { throw 'x64 dumpbin.exe not found' }
-          $headers = & $dumpbin /headers $dll 2>&1 | Out-String
-          if ($headers -notmatch '8664 machine') { throw 'Not a valid x64 DLL' }
-          $exports = & $dumpbin /exports $dll 2>&1 | Out-String
-          if ($exports -notmatch 'GetHookAPIs' -or $exports -notmatch 'NotifyShims') {
-            throw 'Required shim exports missing'
+
+          $bytes = [IO.File]::ReadAllBytes((Resolve-Path $dll))
+          $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+          if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550) { throw 'Invalid PE signature' }
+          if ([BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664) { throw 'DLL is not x64' }
+
+          $sectionCount = [BitConverter]::ToUInt16($bytes, $pe + 6)
+          $optionalSize = [BitConverter]::ToUInt16($bytes, $pe + 20)
+          $optional = $pe + 24
+          if ([BitConverter]::ToUInt16($bytes, $optional) -ne 0x20b) { throw 'Expected PE32+ image' }
+          $exportRva = [BitConverter]::ToUInt32($bytes, $optional + 112)
+          if ($exportRva -eq 0) { throw 'No PE export directory' }
+          $sectionTable = $optional + $optionalSize
+
+          function Convert-Rva([uint32]$rva) {
+            for ($i = 0; $i -lt $sectionCount; $i++) {
+              $s = $sectionTable + 40 * $i
+              $virtualSize = [BitConverter]::ToUInt32($bytes, $s + 8)
+              $virtualAddress = [BitConverter]::ToUInt32($bytes, $s + 12)
+              $rawSize = [BitConverter]::ToUInt32($bytes, $s + 16)
+              $rawPointer = [BitConverter]::ToUInt32($bytes, $s + 20)
+              $span = [Math]::Max($virtualSize, $rawSize)
+              if ($rva -ge $virtualAddress -and $rva -lt ($virtualAddress + $span)) {
+                return [int]($rawPointer + $rva - $virtualAddress)
+              }
+            }
+            throw "Could not map RVA $rva"
           }
+
+          $exportOffset = Convert-Rva $exportRva
+          $numberOfNames = [BitConverter]::ToUInt32($bytes, $exportOffset + 24)
+          $namesRva = [BitConverter]::ToUInt32($bytes, $exportOffset + 32)
+          $namesOffset = Convert-Rva $namesRva
+          $exports = @()
+          for ($i = 0; $i -lt $numberOfNames; $i++) {
+            $nameRva = [BitConverter]::ToUInt32($bytes, $namesOffset + 4 * $i)
+            $nameOffset = Convert-Rva $nameRva
+            $end = $nameOffset
+            while ($end -lt $bytes.Length -and $bytes[$end] -ne 0) { $end++ }
+            $exports += [Text.Encoding]::ASCII.GetString($bytes, $nameOffset, $end - $nameOffset)
+          }
+          foreach ($required in @('GetHookAPIs', 'NotifyShims')) {
+            if ($exports -notcontains $required) { throw "Missing export: $required" }
+          }
+          Write-Host "Verified x64 shim DLL. Exports: $($exports -join ', ')"
+
       - name: Package
         shell: pwsh
         run: |
@@ -64,9 +85,10 @@ jobs:
           @'
           EXPERIMENTAL DLL ONLY — NOT AN INSTALLER.
           Target: Windows 11 x64 build 26300.9711.
-          Do not copy this DLL into System32 or install an SDB with it.
-          This artifact has not been runtime-validated. Keep Task Manager available.
+          Do not copy this DLL into System32 or register an SDB.
+          Successful compilation does not prove runtime compatibility.
           '@ | Set-Content package/TEST-WARNING.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: Taskbar-OLED-Indicator-experimental-x64
