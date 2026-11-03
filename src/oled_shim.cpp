@@ -1,4 +1,5 @@
 #include <windows.h>
+#include <unknwn.h>
 #include <dbghelp.h>
 #include <winrt/base.h>
 #include <winrt/Windows.UI.Xaml.h>
@@ -29,6 +30,15 @@ DWORD g_bridgeThread{};
 
 using GetTaskbarHostFn = void* (__fastcall*)(void*, void**);
 using DecrefFn = void (__fastcall*)(void*);
+
+bool SafeReadPointer(const void* address, void** value) {
+    __try { *value = *reinterpret_cast<void* const*>(address); return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { *value = nullptr; return false; }
+}
+bool SafeReadBytes(const BYTE* address, BYTE* value, size_t count) {
+    __try { for (size_t i=0;i<count;i++) value[i]=address[i]; return true; }
+    __except(EXCEPTION_EXECUTE_HANDLER) { return false; }
+}
 
 bool IsTargetBuild() {
     using RtlGetVersionFn = LONG (WINAPI*)(PRTL_OSVERSIONINFOW);
@@ -87,8 +97,9 @@ bool ResolveTaskbarSymbols() {
 void* FindTaskListWndSite(void* taskBand) {
     auto** p = static_cast<void**>(taskBand);
     for (int i=0;i<20;i++,p++) {
-        __try { if (*p == g_primarySiteVtable) return p; }
-        __except(EXCEPTION_EXECUTE_HANDLER) { return nullptr; }
+        void* value{};
+        if (!SafeReadPointer(p,&value)) return nullptr;
+        if (value == g_primarySiteVtable) return p;
     }
     return nullptr;
 }
@@ -111,13 +122,14 @@ UIElement GetTaskbarRootContent(HWND taskbar) {
 
     size_t offset = 0x10;
     auto* code = static_cast<const BYTE*>(g_frameHeight);
-    __try {
-        if (code[0]==0x48 && code[1]==0x83 && code[2]==0xEC && code[3]==0x28 &&
-            code[4]==0x48 && code[5]==0x83 && code[6]==0xC1 && code[7]<=0x7f) offset=code[7];
-    } __except(EXCEPTION_EXECUTE_HANDLER) {}
+    BYTE prologue[8]{};
+    if (SafeReadBytes(code,prologue,sizeof(prologue)) &&
+        prologue[0]==0x48 && prologue[1]==0x83 && prologue[2]==0xEC && prologue[3]==0x28 &&
+        prologue[4]==0x48 && prologue[5]==0x83 && prologue[6]==0xC1 && prologue[7]<=0x7f) offset=prologue[7];
     IUnknown* elementUnknown{};
-    __try { elementUnknown = *reinterpret_cast<IUnknown**>(static_cast<BYTE*>(shared[0])+offset); }
-    __except(EXCEPTION_EXECUTE_HANDLER) { elementUnknown=nullptr; }
+    void* elementPointer{};
+    if (SafeReadPointer(static_cast<BYTE*>(shared[0])+offset,&elementPointer))
+        elementUnknown = static_cast<IUnknown*>(elementPointer);
 
     FrameworkElement element{nullptr};
     if (elementUnknown) elementUnknown->QueryInterface(winrt::guid_of<FrameworkElement>(), winrt::put_abi(element));
