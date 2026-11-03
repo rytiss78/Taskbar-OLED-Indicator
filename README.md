@@ -82,7 +82,7 @@ A successful `SdbOpenDatabase` call only shows the file can be opened. It is not
 
 ### Diagnostics
 
-The [CustomShim README logging notes](https://github.com/Fleex255/CustomShim# getting-shim-logs) describe:
+The [CustomShim README logging notes](https://github.com/Fleex255/CustomShim#getting-shim-logs) describe:
 - `SHIMENG_DEBUG_LEVEL=4` for shim-engine diagnostics.
 - `LogFlags=255` (DWORD) under `HKLM\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags` for the 64-bit engine.
 - `SHIM_DEBUG_LEVEL=4` and `SHIM_FILE_LOG` for logging emitted by the custom shim itself.
