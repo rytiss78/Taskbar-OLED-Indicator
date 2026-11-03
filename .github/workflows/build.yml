@@ -23,10 +23,38 @@ jobs:
         run: |
           $dll = 'build/Release/AcRes.dll'
           if (!(Test-Path $dll)) { throw 'DLL not produced' }
-          dumpbin /headers $dll | Select-String '8664 machine'
-          if ($LASTEXITCODE -ne 0) { throw 'Not a valid x64 DLL' }
-          dumpbin /exports $dll | Select-String 'GetHookAPIs|NotifyShims'
-          if ($LASTEXITCODE -ne 0) { throw 'Required shim exports missing' }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          if (!(Test-Path $vswhere)) { throw 'vswhere.exe not found' }
+          $vs = & $vswhere -latest -products '*' -property installationPath
+          if (!$vs) { throw 'Visual Studio installation not found' }
+          $dumpbin = Get-ChildItem (Join-Path $vs 'VC/Tools/MSVC') -Filter dumpbin.exe -Recurse |
+            Where-Object FullName -Match '\\Hostx64\\x64\\dumpbin.exe
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item build/Release/AcRes.dll package/
+          Copy-Item README.md package/
+          @'
+          EXPERIMENTAL DLL ONLY — NOT AN INSTALLER.
+          Target: Windows 11 x64 build 26300.9711.
+          Do not copy this DLL into System32 or install an SDB with it.
+          This artifact has not been runtime-validated. Keep Task Manager available.
+          '@ | Set-Content package/TEST-WARNING.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Taskbar-OLED-Indicator-experimental-x64
+          path: package/
+          retention-days: 14
+ |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (!$dumpbin) { throw 'x64 dumpbin.exe not found' }
+          $headers = & $dumpbin /headers $dll 2>&1 | Out-String
+          if ($headers -notmatch '8664 machine') { throw 'Not a valid x64 DLL' }
+          $exports = & $dumpbin /exports $dll 2>&1 | Out-String
+          if ($exports -notmatch 'GetHookAPIs' -or $exports -notmatch 'NotifyShims') {
+            throw 'Required shim exports missing'
+          }
       - name: Package
         shell: pwsh
         run: |
