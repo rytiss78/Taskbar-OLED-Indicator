@@ -125,7 +125,9 @@ The CI workflow should build the x64 DLL and compatibility database and publish 
 
 ## Installation
 
-There is no validated installer. **Do not install artifacts from the failed feature-branch experiment.** Do not manually copy any DLL into System32 or register an experimental SDB from an unverified build.
+There is no validated installer. **Do not install artifacts from the failed feature-branch experiment.**
+
+The custom-shim loading references conflict on the DLL path and accepted filename (see [Handoff findings](#most-important-unresolved-issue-shim-dll-loading-contract)). The next implementation must establish this contract on a disposable Windows test target before packaging. Never overwrite an existing Windows DLL; inspect the target path, owner, version and hash, and provide a tested rollback before any system-wide placement.
 
 ## Uninstallation and recovery
 
